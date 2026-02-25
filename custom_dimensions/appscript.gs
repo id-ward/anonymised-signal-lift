@@ -244,6 +244,10 @@ function buildASLReportv2() {
         return x;
     };
 
+    // Normalises demand channel strings to a canonical lowercase no-separator form.
+    // Handles both 'AD_EXCHANGE' and 'Ad Exchange' → 'adexchange', etc.
+    const normDemand = (v) => String(v || '').toLowerCase().replace(/[_ ]/g, '');
+
     // -------------------------------------------------------
     // CHUNKED ROW PROCESSING
     // Reads the source sheet in chunks of CHUNK_SIZE rows to
@@ -262,19 +266,19 @@ function buildASLReportv2() {
             const cd0 = String(r[CD0_COL] || '');
             const ppid = norm(r[PPID_STATUS_COL]);
             const tpid = norm(r[TPID_STATUS_COL]);
-            const demand = r[DEMAND_CHANNEL_COL];
+            const demand = normDemand(r[DEMAND_CHANNEL_COL]);
 
             // Skip rows that are not usable: empty CD0, not-applicable, or restricted PPID.
             if (!cd0 || cd0 === '(not applicable)' || ppid === 'Restricted') return;
-            // Only process AD_EXCHANGE and AD_SERVER demand channels.
-            if (demand !== 'AD_EXCHANGE' && demand !== 'AD_SERVER') return;
+            // Only process AD_EXCHANGE / Ad Exchange and AD_SERVER / Ad server demand channels.
+            if (demand !== 'adexchange' && demand !== 'adserver') return;
 
             const date = ensureDateKey(r[DATE_COL]);
             const imps = r[IMPRESSIONS_COL] || 0;
             const reqs = r[AD_REQUESTS_COL] || 0;
             // Revenue source depends on demand channel.
-            const rev = demand === 'AD_EXCHANGE' ? r[ADX_REV_COL] || 0 : r[ADS_REV_COL] || 0;
-            const ch = demand === 'AD_EXCHANGE' ? 'adx' : 'ads';
+            const rev = demand === 'adexchange' ? r[ADX_REV_COL] || 0 : r[ADS_REV_COL] || 0;
+            const ch = demand === 'adexchange' ? 'adx' : 'ads';
 
             // --- TREATMENT GROUP classification ---
             // CD0 = 1, TPID Missing, PPID Active → PPID-only treatment
@@ -382,18 +386,7 @@ function buildASLReportv2() {
     // Iterate over each month and generate the two report sheets
     // with year included in the sheet name (e.g. "Jan 2026 - PPID-only").
     // -------------------------------------------------------
-    const TRAINING_PERIOD_DAYS = 7;
     const sortedMonthKeys = Object.keys(monthBuckets).sort();
-
-    // Determine training period from actual first date with data
-    const sortedDateKeys = [...allDateKeys].sort();
-    const firstDataDate = sortedDateKeys.length > 0 ? sortedDateKeys[0] : null;
-    let trainingEndDate = null;
-    if (firstDataDate) {
-        const d = new Date(firstDataDate);
-        d.setDate(d.getDate() + TRAINING_PERIOD_DAYS - 1);
-        trainingEndDate = Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-    }
 
     sortedMonthKeys.forEach(monthKey => {
         const year = monthKey.substring(0, 4);         // e.g. "2026"
@@ -406,8 +399,6 @@ function buildASLReportv2() {
             filterByMonth(treatmentData.ppidOnly, monthKey),
             filterByMonth(controlData.ppidOnly, monthKey),
             monthKey,
-            firstDataDate,
-            trainingEndDate
         );
 
         generateOutput(
@@ -416,8 +407,6 @@ function buildASLReportv2() {
             filterByMonth(treatmentData.combined, monthKey),
             filterByMonth(controlData.combined, monthKey),
             monthKey,
-            firstDataDate,
-            trainingEndDate
         );
     });
 
@@ -439,7 +428,7 @@ function buildASLReportv2() {
 // and the monthKey (e.g. "2025-01") to determine the full
 // date range to display.
 // ============================================================
-function generateOutput(ss, sheetName, treatment, control, monthKey, firstDataDate, trainingEndDate) {
+function generateOutput(ss, sheetName, treatment, control, monthKey) {
     let sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
     sheet.clearContents();
 
@@ -469,11 +458,6 @@ function generateOutput(ss, sheetName, treatment, control, monthKey, firstDataDa
     // and revenue uplift. Dates with no data produce all-zero rows.
     // -------------------------------------------------------
     function computeRow(dateKey) {
-        // Training period: first TRAINING_PERIOD_DAYS days from first data date
-        if (firstDataDate && trainingEndDate && dateKey >= firstDataDate && dateKey <= trainingEndDate) {
-            return [dateKey, 'Training Period', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''];
-        }
-
         const tgAdx = treatment.adx[dateKey] || { impressions: 0, revenue: 0, adRequests: 0 };
         const cgAdx = control.adx[dateKey] || { impressions: 0, revenue: 0, adRequests: 0 };
         const tgAds = treatment.ads[dateKey] || { impressions: 0, revenue: 0, adRequests: 0 };
@@ -661,17 +645,6 @@ function generateOutput(ss, sheetName, treatment, control, monthKey, firstDataDa
 
     // Make TOTAL row bold
     sheet.getRange(totalsRow, 1, 1, 33).setFontWeight('bold');
-
-    // -------------------------------------------------------
-    // TRAINING PERIOD — Grey background for training period days
-    // -------------------------------------------------------
-    if (firstDataDate && trainingEndDate) {
-        for (let i = 0; i < dates.length; i++) {
-            if (dates[i] >= firstDataDate && dates[i] <= trainingEndDate) {
-                sheet.getRange(dataStartRow + i, 1, 1, 33).setBackground('#f3f3f3');
-            }
-        }
-    }
 
     // -------------------------------------------------------
     // CONDITIONAL FORMATTING — Revenue Uplift columns
