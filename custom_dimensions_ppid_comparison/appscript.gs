@@ -5,38 +5,45 @@
  * ==================================================================================
  *
  * OBJECTIVE:
- * Estimate the direct revenue impact of SignalLift on ad requests containing PPID 
- * and PPS signals versus ad requests without these signals, using GAM reporting 
- * data from Ad Exchange (AdX) and Ad Server (AdS) channels.
+ * Measure the incremental revenue impact of Anonymised PPID/PPS signals on ad
+ * requests that already carry the client's own PPID. By requiring PPID Status =
+ * Active in both groups, this analysis isolates the uplift attributable to
+ * Anonymised signal enrichment above the baseline that the client's native PPID
+ * already delivers.
  *
  * ==================================================================================
  * RANDOMISED CONTROL TRIAL DESIGN:
  * ==================================================================================
  *
  * TREATMENT GROUP (TG):
- *   Ad requests containing PPID and/or PPS signals with Active status
+ *   Ad requests enriched with Anonymised signals (CD0 = 1 or CD0 = 3) where the
+ *   client's own PPID is also active and no third-party ID is present.
  *
  * CONTROL GROUP (CG):
- *   Ad requests where signals were deliberately withheld (PPID = Missing, CD0 = 8)
+ *   Ad requests where Anonymised signals are deliberately withheld (CD0 = 8) but
+ *   the client's own PPID is still active and no third-party ID is present.
+ *
+ * This design answers: "How much additional revenue do Anonymised signals generate
+ * on top of what the client's existing PPID already delivers?"
  *
  * KEY VALUE (CD0) ASSIGNMENTS:
- *   - CD0 = 1: PPID-only signal set
- *   - CD0 = 3: Combined Signals (PPID + PPS both set)
- *   - CD0 = 8: Control Group (signals deliberately withheld)
+ *   - CD0 = 1: Anonymised PPID-only signal set
+ *   - CD0 = 3: Anonymised Combined Signals (PPID + PPS both set)
+ *   - CD0 = 8: Control Group (Anonymised signals deliberately withheld)
  *
  * ==================================================================================
  * CRITICAL DIMENSIONS FOR MEASUREMENT:
  * ==================================================================================
  *
- * 1. PPID STATUS (Publisher Provided Identifier):
- *    - Active: PPID present in ad request and usable by Google
- *    - Missing: PPID not present in ad request
- *    - Restricted: PPID present but cannot be used due to consent restrictions
+ * 1. PPID STATUS (Publisher Provided Identifier — the client's own PPID):
+ *    - Active: Client PPID present in ad request and usable by Google
+ *    - Missing: Client PPID not present in ad request (excluded from this analysis)
+ *    - Restricted: Client PPID present but restricted by consent (excluded)
  *
  * 2. THIRD-PARTY ID STATUS (e.g., cookies, MAIDs):
- *    - Active: Third-party identifier present and usable
- *    - Missing: No third-party identifier present
- *    - Restricted: Third-party ID present but restricted by consent
+ *    - Active: Third-party identifier present and usable (excluded from this analysis)
+ *    - Missing: No third-party identifier present (required for this analysis)
+ *    - Restricted: Third-party ID present but restricted (excluded)
  *
  * 3. DEMAND CHANNEL:
  *    - AD_EXCHANGE (AdX): Programmatic auction revenue
@@ -46,42 +53,40 @@
  * SIGNAL TYPE ISOLATION LOGIC:
  * ==================================================================================
  *
+ * Both signal types require PPID Status = Active (client PPID present) and
+ * TPID Status = Missing (no third-party ID) across both TG and CG, to ensure a
+ * clean comparison within the same cookieless, client-PPID-enabled traffic pool.
+ *
  * PPID-ONLY (CD0 = 1):
  * --------------------
- * Analysis is restricted to TPID = Missing throughout to isolate the pure impact
- * of PPID without any third-party ID interference.
- *
  *   Treatment Group (TG):
- *     - CD0 = 1 (PPID-only signal set)
- *     - PPID Status = Active
+ *     - CD0 = 1 (Anonymised PPID signal enrichment active)
+ *     - PPID Status = Active (client PPID present)
  *     - Third-party ID Status = Missing
  *
  *   Control Group (CG):
- *     - CD0 = 8 (control group)
- *     - PPID Status = Active
+ *     - CD0 = 8 (Anonymised signals withheld)
+ *     - PPID Status = Active (client PPID present)
  *     - Third-party ID Status = Missing
  *
  * COMBINED SIGNALS (CD0 = 3):
  * ---------------------------
- * Analysis is restricted to TPID = Missing throughout for consistency with the
- * PPID-only analysis.
- *
  *   Treatment Group (TG):
- *     - CD0 = 3 (Combined signals set)
- *     - PPID Status = Active
+ *     - CD0 = 3 (Anonymised PPID + PPS signal enrichment active)
+ *     - PPID Status = Active (client PPID present)
  *     - Third-party ID Status = Missing
  *
  *   Control Group (CG):
- *     - CD0 = 8 (control group)
- *     - PPID Status = Active
+ *     - CD0 = 8 (Anonymised signals withheld)
+ *     - PPID Status = Active (client PPID present)
  *     - Third-party ID Status = Missing
  *
  * ==================================================================================
  * EXCLUSIONS (Applied to Both Signal Types):
  * ==================================================================================
  *
- * - PPID Status = Restricted (unusable by Google due to consent)
- * - PPID Status = Missing
+ * - PPID Status = Missing (client PPID absent — not relevant to this comparison)
+ * - PPID Status = Restricted (client PPID unusable due to consent)
  * - Third-party ID Status != Missing (Active and Restricted rows are excluded)
  * - CD0 = (not applicable) or empty
  * - Demand Channel != AD_EXCHANGE and != AD_SERVER
@@ -98,7 +103,7 @@
  * Step 2: Calculate eCPM (effective Cost Per Mille)
  *   - TG eCPM = (TG Revenue / TG Ad Requests) x 1000
  *   - CG eCPM = (CG Revenue / CG Ad Requests) x 1000
- *   
+ *
  *   Note: eCPM combines both CPM and fill rate into a single metric
  *
  * Step 3: Calculate eCPM Uplift
@@ -108,7 +113,8 @@
  *   - Revenue Uplift = (eCPM Uplift x TG Ad Requests) / 1000
  *   - Revenue % = Revenue Uplift / TG Revenue x 100%
  *
- *   Revenue Uplift represents the incremental revenue generated by the signals.
+ *   Revenue Uplift represents the incremental revenue from Anonymised signal
+ *   enrichment above the client's baseline PPID performance.
  *   Revenue % expresses that uplift as a percentage of the treatment group's revenue.
  *
  * ==================================================================================
@@ -123,28 +129,37 @@
  *   - eCPM (Revenue / Ad Requests x 1000)
  *
  * Uplift Metrics:
+ *   - Fill Rate Uplift (TG Fill Rate - CG Fill Rate)
  *   - eCPM Uplift (absolute difference)
  *   - Revenue % (Revenue Uplift as % of TG Revenue)
- *   - Revenue (incremental revenue from signals)
-*
-* ==================================================================================
-* OUTPUT STRUCTURE:
-* ==================================================================================
-*
-* Two separate output sheets are generated:
-*
-* 1. "PPID-only Uplift"
-*    - Shows isolated impact of PPID signal alone
-*    - Excludes third-party ID interference
-*
-* 2. "Combined Signals Uplift"
-*    - Shows combined impact of PPID + PPS signals
-*    - Includes all third-party ID scenarios
-*
-* Each sheet contains daily metrics and a totals row with aggregated/averaged values.
-*
-* ==================================================================================
-*/
+ *   - Revenue Uplift (incremental revenue from Anonymised signals)
+ *
+ * ==================================================================================
+ * OUTPUT STRUCTURE:
+ * ==================================================================================
+ *
+ * One pair of output sheets per month:
+ *
+ * 1. "{Mon} {Year} - PPID-only"
+ *    - Incremental uplift from Anonymised PPID signal on top of client PPID
+ *
+ * 2. "{Mon} {Year} - PPID+PPS"
+ *    - Incremental uplift from Anonymised PPID + PPS signals on top of client PPID
+ *
+ * Each sheet contains:
+ *   - 3-row header (channel / group / metric)
+ *   - Row 4: TOTAL (aggregated/weighted-average formulas)
+ *   - Row 5+: Daily data rows covering the full calendar month
+ *   - Revenue Uplift summary box below the data
+ *   - Optional: Browser, Device, and Inventory coverage tables
+ *
+ * One summary sheet per year: "{Year} Summary"
+ *   - Cross-references all monthly sheets for the year
+ *   - Columns: AD REQUESTS, REVENUE UPLIFT, RELATIVE UPLIFT
+ *   - Sub-columns: PPID-only, PPID+PPS, Total
+ *
+ * ==================================================================================
+ */
 // ============================================================
 // MAIN ENTRY POINT
 // Reads the source sheet, aggregates data by signal lift group,
