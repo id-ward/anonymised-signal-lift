@@ -619,27 +619,19 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
     // --- eCPM formulas on the TOTAL row (WEIGHTED AVERAGE of daily eCPMs) ---
     // ADX TG eCPM: col 7 (weighted by col 4), ADX CG eCPM: col 13 (weighted by col 10)
     // ADS TG eCPM: col 23 (weighted by col 20), ADS CG eCPM: col 29 (weighted by col 26)
-    const ecpmWeightCols = { 7: 4, 13: 10, 23: 20, 29: 26 };
+    const ecpmWeightCols = { 7: 4, 13: 10, 15: 4, 16: 3, 23: 20, 29: 26, 31: 20, 32: 19 };
     Object.entries(ecpmWeightCols).forEach(([c, w]) => {
-        sheet.getRange(totalsRow, Number(c)).setFormulaR1C1(`=IFERROR(AVERAGE.WEIGHTED(R${dataStartRow}C:R${dataEndRow}C, R${dataStartRow}C${w}:R${dataEndRow}C${w}), 0)`);
+        sheet.getRange(totalsRow, Number(c)).setFormulaR1C1(`=ARRAYFORMULA(AVERAGE.WEIGHTED(IF(ISBLANK(R${dataStartRow}C:R${dataEndRow}C),0,R${dataStartRow}C:R${dataEndRow}C), IF(ISBLANK(R${dataStartRow}C${w}:R${dataEndRow}C${w}),0,R${dataStartRow}C${w}:R${dataEndRow}C${w})))`);
     });
 
     // --- Uplift formulas on the TOTAL row ---
     // ADX Fill Rate Uplift (col 14): TG Fill Rate (col 6) - CG Fill Rate (col 12)
     sheet.getRange(totalsRow, 14).setFormulaR1C1(`=R${totalsRow}C6-R${totalsRow}C12`);
-    // ADX eCPM Uplift (col 15): WEIGHTED AVERAGE of daily uplifts (weighted by col 4 — TG ADX Ad Requests)
-    sheet.getRange(totalsRow, 15).setFormulaR1C1(`=IFERROR(AVERAGE.WEIGHTED(R${dataStartRow}C:R${dataEndRow}C, R${dataStartRow}C4:R${dataEndRow}C4), 0)`);
-    // ADX Revenue % (col 16): WEIGHTED AVERAGE by TG Revenue (col 3)
-    sheet.getRange(totalsRow, 16).setFormulaR1C1(`=IFERROR(AVERAGE.WEIGHTED(R${dataStartRow}C:R${dataEndRow}C, R${dataStartRow}C3:R${dataEndRow}C3), 0)`);
     // ADX Revenue Uplift (col 17): SUM of daily revenue uplifts
     sheet.getRange(totalsRow, 17).setFormulaR1C1(`=SUM(R${dataStartRow}C:R${dataEndRow}C)`);
 
     // ADS Fill Rate Uplift (col 30): TG Fill Rate (col 22) - CG Fill Rate (col 28)
     sheet.getRange(totalsRow, 30).setFormulaR1C1(`=R${totalsRow}C22-R${totalsRow}C28`);
-    // ADS eCPM Uplift (col 31): WEIGHTED AVERAGE of daily uplifts (weighted by col 20 — TG ADS Ad Requests)
-    sheet.getRange(totalsRow, 31).setFormulaR1C1(`=IFERROR(AVERAGE.WEIGHTED(R${dataStartRow}C:R${dataEndRow}C, R${dataStartRow}C20:R${dataEndRow}C20), 0)`);
-    // ADS Revenue % (col 32): WEIGHTED AVERAGE by TG Revenue (col 19)
-    sheet.getRange(totalsRow, 32).setFormulaR1C1(`=IFERROR(AVERAGE.WEIGHTED(R${dataStartRow}C:R${dataEndRow}C, R${dataStartRow}C19:R${dataEndRow}C19), 0)`);
     // ADS Revenue Uplift (col 33): SUM of daily revenue uplifts
     sheet.getRange(totalsRow, 33).setFormulaR1C1(`=SUM(R${dataStartRow}C:R${dataEndRow}C)`);
 
@@ -1305,11 +1297,11 @@ function buildSummarySheet(ss, year, monthKeys) {
         sheet.getRange(adsRow, 8).setFormula(`=IFERROR(${ppidSheet}!AF4,"")`);   // PPID-only  ADS revenue %
         sheet.getRange(adsRow, 9).setFormula(`=IFERROR(${ppsSheet}!AF4,"")`);    // PPID+PPS   ADS revenue %
         // Total row for relative uplift — Weighted Average of ADX and ADS
-        // For PPID-only (Col 8/H): weighted by Col E (Revenue)
-        sheet.getRange(totalRow, 8).setFormula(`=IFERROR(AVERAGE.WEIGHTED(H${adxRow}:H${adsRow}, E${adxRow}:E${adsRow}), "")`);
+        // For PPID-only (Col 8/H): weighted by Col B (Ad Requests)
+        sheet.getRange(totalRow, 8).setFormula(`=IFERROR(ARRAYFORMULA(AVERAGE.WEIGHTED(IF(ISBLANK(H${adxRow}:H${adsRow}),0,H${adxRow}:H${adsRow}), IF(ISBLANK(B${adxRow}:B${adsRow}),0,B${adxRow}:B${adsRow}))), "")`);
 
-        // For PPID+PPS (Col 9/I): weighted by Col F (Revenue)
-        sheet.getRange(totalRow, 9).setFormula(`=IFERROR(AVERAGE.WEIGHTED(I${adxRow}:I${adsRow}, F${adxRow}:F${adsRow}), "")`);
+        // For PPID+PPS (Col 9/I): weighted by Col C (Ad Requests)
+        sheet.getRange(totalRow, 9).setFormula(`=IFERROR(ARRAYFORMULA(AVERAGE.WEIGHTED(IF(ISBLANK(I${adxRow}:I${adsRow}),0,I${adxRow}:I${adsRow}), IF(ISBLANK(C${adxRow}:C${adsRow}),0,C${adxRow}:C${adsRow}))), "")`);
 
         // ---------------------------------------------------------
         // ROW STYLING
