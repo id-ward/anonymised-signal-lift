@@ -1,7 +1,7 @@
 // @ts-nocheck
 /**
  * ==================================================================================
- * ANONYMISED SIGNAL LIFT METHODOLOGY
+ * PPID COMPARISON METHODOLOGY
  * ==================================================================================
  *
  * OBJECTIVE:
@@ -170,7 +170,10 @@
 // ============================================================
 function buildPPIDComparisonReport() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sourceSheet = ss.getSheetByName('Raw Data');
+    const sourceSheet = ss.getSheetByName('Raw Data') || ss.getSheetByName('Sheet1');
+    if (!sourceSheet) {
+        throw new Error("Rename your data sheet as 'Raw Data'");
+    }
 
     // -------------------------------------------------------
     // COLUMN INDEX LOOKUP
@@ -179,7 +182,8 @@ function buildPPIDComparisonReport() {
     // -------------------------------------------------------
     const header = sourceSheet.getRange(1, 1, 1, sourceSheet.getLastColumn()).getValues()[0];
     const safeColIndex = (name) => {
-        const idx = header.indexOf(name);
+        const lower = name.toLowerCase();
+        const idx = header.findIndex(h => String(h).toLowerCase() === lower);
         return idx === -1 ? null : idx;
     };
 
@@ -257,6 +261,9 @@ function buildPPIDComparisonReport() {
         return x;
     };
 
+    // Normalises demand channel strings — handles 'AD_EXCHANGE', 'Ad Exchange', etc.
+    const normDemand = (v) => String(v || '').toLowerCase().replace(/[_ ]/g, '');
+
     // -------------------------------------------------------
     // CHUNKED ROW PROCESSING
     // Reads the source sheet in chunks of CHUNK_SIZE rows to
@@ -275,12 +282,12 @@ function buildPPIDComparisonReport() {
             const cd0 = String(r[CD0_COL] || '');
             const ppid = norm(r[PPID_STATUS_COL]);
             const tpid = norm(r[TPID_STATUS_COL]);
-            const demand = r[DEMAND_CHANNEL_COL];
+            const demand = normDemand(r[DEMAND_CHANNEL_COL]);
 
             // Skip rows that are not usable: empty CD0, not-applicable, or non-Active PPID.
             if (!cd0 || cd0 === '(not applicable)' || ppid !== 'Active') return;
             // Only process AD_EXCHANGE and AD_SERVER demand channels.
-            if (demand !== 'AD_EXCHANGE' && demand !== 'AD_SERVER') return;
+            if (demand !== 'adexchange' && demand !== 'adserver') return;
             // All analysis is restricted to TPID = Missing.
             if (tpid !== 'Missing') return;
 
@@ -288,8 +295,8 @@ function buildPPIDComparisonReport() {
             const imps = r[IMPRESSIONS_COL] || 0;
             const reqs = r[AD_REQUESTS_COL] || 0;
             // Revenue source depends on demand channel.
-            const rev = demand === 'AD_EXCHANGE' ? r[ADX_REV_COL] || 0 : r[ADS_REV_COL] || 0;
-            const ch = demand === 'AD_EXCHANGE' ? 'adx' : 'ads';
+            const rev = demand === 'adexchange' ? r[ADX_REV_COL] || 0 : r[ADS_REV_COL] || 0;
+            const ch = demand === 'adexchange' ? 'adx' : 'ads';
 
             // --- TREATMENT GROUP classification ---
             // CD0 = 1, PPID Active, TPID Missing → PPID-only treatment
@@ -376,6 +383,8 @@ function buildPPIDComparisonReport() {
         }
     });
 
+    SpreadsheetApp.flush();
+
     // -------------------------------------------------------
     // GROUP MONTHS BY YEAR
     // Build a year → monthKeys map so we can create one summary
@@ -427,6 +436,7 @@ function buildPPIDComparisonReport() {
         buildSummarySheet(ss, year, yearBuckets[year]);
     });
 
+    SpreadsheetApp.flush();
     reorderSheets(ss);
 }
 
@@ -446,6 +456,7 @@ function reorderSheets(ss) {
     const summarySheets = [];
     const monthlySheets = [];
     const toHide = [];
+    let rawDataSheet = null;
 
     ss.getSheets().forEach(sheet => {
         const name = sheet.getName();
@@ -458,6 +469,7 @@ function reorderSheets(ss) {
             monthlySheets.push({ sortKey: parseInt(m[2]) * 1000 + monthNum * 10 + signalOrder, sheet });
         }
         if (HIDE_NAMES.includes(name.toLowerCase())) toHide.push(sheet);
+        if (name === 'Raw Data' || name === 'Sheet1') rawDataSheet = sheet;
     });
 
     summarySheets.sort((a, b) => b.sortKey - a.sortKey);
@@ -472,6 +484,10 @@ function reorderSheets(ss) {
         ss.setActiveSheet(sheet);
         ss.moveActiveSheet(position++);
     });
+    if (rawDataSheet) {
+        ss.setActiveSheet(rawDataSheet);
+        ss.moveActiveSheet(ss.getSheets().length);
+    }
 
     toHide.forEach(sheet => sheet.hideSheet());
 }
@@ -703,34 +719,26 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
 
     // -------------------------------------------------------
     // CONDITIONAL FORMATTING — Revenue Uplift columns
-    // Green if positive, red if negative. Applied to both the
-    // data rows and the TOTAL row for columns 17 (ADX) and 33 (ADS).
+    // Green if positive, red if negative. Applied column-level
+    // to the TOTAL row + all data rows for cols 17 (ADX) and 33 (ADS).
     // -------------------------------------------------------
     const adxUpliftCol = 17;
     const adsUpliftCol = 33;
+    const numRows = dataEndRow - totalsRow + 1;
 
-    for (let row = dataStartRow; row <= dataEndRow; row++) {
-        const adxCell = sheet.getRange(row, adxUpliftCol);
-        const adxVal = adxCell.getValue();
-        if (adxVal > 0) adxCell.setBackground('#b6d7a8');
-        else if (adxVal < 0) adxCell.setBackground('#ea9999');
+    const adxRange = sheet.getRange(totalsRow, adxUpliftCol, numRows, 1);
+    const adsRange = sheet.getRange(totalsRow, adsUpliftCol, numRows, 1);
 
-        const adsCell = sheet.getRange(row, adsUpliftCol);
-        const adsVal = adsCell.getValue();
-        if (adsVal > 0) adsCell.setBackground('#b6d7a8');
-        else if (adsVal < 0) adsCell.setBackground('#ea9999');
-    }
-
-    // Conditional formatting on TOTAL row uplift cells
-    const adxTotal = sheet.getRange(totalsRow, adxUpliftCol);
-    const adxTotalVal = adxTotal.getValue();
-    if (adxTotalVal > 0) adxTotal.setBackground('#b6d7a8');
-    else if (adxTotalVal < 0) adxTotal.setBackground('#ea9999');
-
-    const adsTotal = sheet.getRange(totalsRow, adsUpliftCol);
-    const adsTotalVal = adsTotal.getValue();
-    if (adsTotalVal > 0) adsTotal.setBackground('#b6d7a8');
-    else if (adsTotalVal < 0) adsTotal.setBackground('#ea9999');
+    sheet.setConditionalFormatRules([
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([adxRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberLessThan(0).setBackground('#ea9999').setRanges([adxRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([adsRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberLessThan(0).setBackground('#ea9999').setRanges([adsRange]).build(),
+    ]);
 
     // -------------------------------------------------------
     // BORDERS
@@ -837,13 +845,16 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
     // Currency format on summary value cells
     sheet.getRange(summaryRow + 1, startCol + 1, 3, 1).setNumberFormat('#,##0.00');
 
-    // Conditional formatting on summary values
-    [[summaryRow + 1, startCol + 1], [summaryRow + 2, startCol + 1], [summaryRow + 3, startCol + 1]].forEach(([r, c]) => {
-        const cell = sheet.getRange(r, c);
-        const val = cell.getValue();
-        if (val > 0) cell.setBackground('#b6d7a8');
-        else if (val < 0) cell.setBackground('#ea9999');
-    });
+    // Conditional formatting on summary values (column-level rule)
+    const summaryValRange = sheet.getRange(summaryRow + 1, startCol + 1, 3, 1);
+    const existingRules = sheet.getConditionalFormatRules();
+    existingRules.push(
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([summaryValRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberLessThan(0).setBackground('#ea9999').setRanges([summaryValRange]).build()
+    );
+    sheet.setConditionalFormatRules(existingRules);
 
     // -------------------------------------------------------
     // BROWSER COVERAGE TABLE
@@ -942,22 +953,21 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
                 // eCPM columns (startCol + 2 and startCol + 3)
                 sheet.getRange(browserRow + 2, startCol + 2, browserRows.length, 2).setNumberFormat('#,##0.00');
 
-                // Conditional formatting for eCPM columns
-                for (let row = 0; row < browserRows.length; row++) {
-                    const actualRow = browserRow + 2 + row;
-
-                    // eCPM AdX column (startCol + 2)
-                    const adxCell = sheet.getRange(actualRow, startCol + 2);
-                    const adxVal = adxCell.getValue();
-                    if (adxVal > 0) adxCell.setBackground('#b6d7a8');
-                    else if (adxVal < 0) adxCell.setBackground('#ea9999');
-
-                    // eCPM AdS column (startCol + 3)
-                    const adsCell = sheet.getRange(actualRow, startCol + 3);
-                    const adsVal = adsCell.getValue();
-                    if (adsVal > 0) adsCell.setBackground('#b6d7a8');
-                    else if (adsVal < 0) adsCell.setBackground('#ea9999');
-                }
+                // Conditional formatting for eCPM columns (column-level rules)
+                const browserRules = sheet.getConditionalFormatRules();
+                const browserAdxRange = sheet.getRange(browserRow + 2, startCol + 2, browserRows.length, 1);
+                const browserAdsRange = sheet.getRange(browserRow + 2, startCol + 3, browserRows.length, 1);
+                browserRules.push(
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([browserAdxRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberLessThan(0).setBackground('#ea9999').setRanges([browserAdxRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([browserAdsRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberLessThan(0).setBackground('#ea9999').setRanges([browserAdsRange]).build()
+                );
+                sheet.setConditionalFormatRules(browserRules);
             }
         }
     }
@@ -1057,22 +1067,21 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
                 // eCPM columns (deviceCol + 2 and deviceCol + 3)
                 sheet.getRange(browserRow + 2, deviceCol + 2, deviceRows.length, 2).setNumberFormat('#,##0.00');
 
-                // Conditional formatting for eCPM columns
-                for (let row = 0; row < deviceRows.length; row++) {
-                    const actualRow = browserRow + 2 + row;
-
-                    // eCPM AdX column (deviceCol + 2)
-                    const adxCell = sheet.getRange(actualRow, deviceCol + 2);
-                    const adxVal = adxCell.getValue();
-                    if (adxVal > 0) adxCell.setBackground('#b6d7a8');
-                    else if (adxVal < 0) adxCell.setBackground('#ea9999');
-
-                    // eCPM AdS column (deviceCol + 3)
-                    const adsCell = sheet.getRange(actualRow, deviceCol + 3);
-                    const adsVal = adsCell.getValue();
-                    if (adsVal > 0) adsCell.setBackground('#b6d7a8');
-                    else if (adsVal < 0) adsCell.setBackground('#ea9999');
-                }
+                // Conditional formatting for eCPM columns (column-level rules)
+                const deviceRules = sheet.getConditionalFormatRules();
+                const deviceAdxRange = sheet.getRange(browserRow + 2, deviceCol + 2, deviceRows.length, 1);
+                const deviceAdsRange = sheet.getRange(browserRow + 2, deviceCol + 3, deviceRows.length, 1);
+                deviceRules.push(
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([deviceAdxRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberLessThan(0).setBackground('#ea9999').setRanges([deviceAdxRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([deviceAdsRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberLessThan(0).setBackground('#ea9999').setRanges([deviceAdsRange]).build()
+                );
+                sheet.setConditionalFormatRules(deviceRules);
             }
         }
     }
@@ -1172,22 +1181,21 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
                 // eCPM columns (inventoryCol + 2 and inventoryCol + 3)
                 sheet.getRange(browserRow + 2, inventoryCol + 2, inventoryRows.length, 2).setNumberFormat('#,##0.00');
 
-                // Conditional formatting for eCPM columns
-                for (let row = 0; row < inventoryRows.length; row++) {
-                    const actualRow = browserRow + 2 + row;
-
-                    // eCPM AdX column (inventoryCol + 2)
-                    const adxCell = sheet.getRange(actualRow, inventoryCol + 2);
-                    const adxVal = adxCell.getValue();
-                    if (adxVal > 0) adxCell.setBackground('#b6d7a8');
-                    else if (adxVal < 0) adxCell.setBackground('#ea9999');
-
-                    // eCPM AdS column (inventoryCol + 3)
-                    const adsCell = sheet.getRange(actualRow, inventoryCol + 3);
-                    const adsVal = adsCell.getValue();
-                    if (adsVal > 0) adsCell.setBackground('#b6d7a8');
-                    else if (adsVal < 0) adsCell.setBackground('#ea9999');
-                }
+                // Conditional formatting for eCPM columns (column-level rules)
+                const inventoryRules = sheet.getConditionalFormatRules();
+                const inventoryAdxRange = sheet.getRange(browserRow + 2, inventoryCol + 2, inventoryRows.length, 1);
+                const inventoryAdsRange = sheet.getRange(browserRow + 2, inventoryCol + 3, inventoryRows.length, 1);
+                inventoryRules.push(
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([inventoryAdxRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberLessThan(0).setBackground('#ea9999').setRanges([inventoryAdxRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([inventoryAdsRange]).build(),
+                    SpreadsheetApp.newConditionalFormatRule()
+                        .whenNumberLessThan(0).setBackground('#ea9999').setRanges([inventoryAdsRange]).build()
+                );
+                sheet.setConditionalFormatRules(inventoryRules);
             }
         }
     }

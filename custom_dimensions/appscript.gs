@@ -157,7 +157,10 @@
 // ============================================================
 function buildASLReportv2() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const sourceSheet = ss.getSheetByName('Raw Data');
+    const sourceSheet = ss.getSheetByName('Raw Data') || ss.getSheetByName('Sheet1');
+    if (!sourceSheet) {
+        throw new Error("Rename your data sheet as 'Raw Data'");
+    }
 
     // -------------------------------------------------------
     // COLUMN INDEX LOOKUP
@@ -369,6 +372,10 @@ function buildASLReportv2() {
         }
     });
 
+    // Flush all pending deletions before inserting new sheets, otherwise
+    // the Sheets service can throw a transient error on the first insertSheet call.
+    SpreadsheetApp.flush();
+
     // -------------------------------------------------------
     // GROUP MONTHS BY YEAR
     // Build a year → monthKeys map so we can create one summary
@@ -418,6 +425,53 @@ function buildASLReportv2() {
     // -------------------------------------------------------
     Object.keys(yearBuckets).sort().forEach(year => {
         buildSummarySheet(ss, year, yearBuckets[year]);
+    });
+
+    organiseSheets(ss);
+}
+
+// ============================================================
+// SHEET ORDERING
+// 1. Summary sheets first (most recent year first)
+// 2. Monthly sheets in decreasing order (most recent first)
+// 3. Raw Data sheet last
+// ============================================================
+function organiseSheets(ss) {
+    const summaryPattern = /^(\d{4})\s+Summary$/;
+    const monthlyPattern = /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\s*-\s*(PPID-only|PPID\+PPS)$/;
+    const MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    const summarySheets = [];
+    const monthlySheets = [];
+    let rawDataSheet = null;
+
+    ss.getSheets().forEach(sheet => {
+        const name = sheet.getName();
+        const sm = summaryPattern.exec(name);
+        if (sm) {
+            summarySheets.push({ key: parseInt(sm[1]), sheet });
+            return;
+        }
+        const mm = monthlyPattern.exec(name);
+        if (mm) {
+            const monthNum = MONTH_ABBR.indexOf(mm[1]) + 1;
+            monthlySheets.push({ key: parseInt(mm[2]) * 100 + monthNum, sheet });
+            return;
+        }
+        if (name === 'Raw Data' || name === 'Sheet1') {
+            rawDataSheet = sheet;
+        }
+    });
+
+    summarySheets.sort((a, b) => b.key - a.key);
+    monthlySheets.sort((a, b) => b.key - a.key);
+
+    const ordered = [...summarySheets, ...monthlySheets].map(x => x.sheet);
+    if (rawDataSheet) ordered.push(rawDataSheet);
+
+    ordered.forEach((sheet, i) => {
+        ss.setActiveSheet(sheet);
+        ss.moveActiveSheet(i + 1);
     });
 }
 
@@ -640,34 +694,26 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
 
     // -------------------------------------------------------
     // CONDITIONAL FORMATTING — Revenue Uplift columns
-    // Green if positive, red if negative. Applied to both the
-    // data rows and the TOTAL row for columns 17 (ADX) and 33 (ADS).
+    // Green if positive, red if negative. Applied column-level
+    // to the TOTAL row + all data rows for cols 17 (ADX) and 33 (ADS).
     // -------------------------------------------------------
     const adxUpliftCol = 17;
     const adsUpliftCol = 33;
+    const numRows = dataEndRow - totalsRow + 1;
 
-    for (let row = dataStartRow; row <= dataEndRow; row++) {
-        const adxCell = sheet.getRange(row, adxUpliftCol);
-        const adxVal = adxCell.getValue();
-        if (adxVal > 0) adxCell.setBackground('#b6d7a8');
-        else if (adxVal < 0) adxCell.setBackground('#ea9999');
+    const adxRange = sheet.getRange(totalsRow, adxUpliftCol, numRows, 1);
+    const adsRange = sheet.getRange(totalsRow, adsUpliftCol, numRows, 1);
 
-        const adsCell = sheet.getRange(row, adsUpliftCol);
-        const adsVal = adsCell.getValue();
-        if (adsVal > 0) adsCell.setBackground('#b6d7a8');
-        else if (adsVal < 0) adsCell.setBackground('#ea9999');
-    }
-
-    // Conditional formatting on TOTAL row uplift cells
-    const adxTotal = sheet.getRange(totalsRow, adxUpliftCol);
-    const adxTotalVal = adxTotal.getValue();
-    if (adxTotalVal > 0) adxTotal.setBackground('#b6d7a8');
-    else if (adxTotalVal < 0) adxTotal.setBackground('#ea9999');
-
-    const adsTotal = sheet.getRange(totalsRow, adsUpliftCol);
-    const adsTotalVal = adsTotal.getValue();
-    if (adsTotalVal > 0) adsTotal.setBackground('#b6d7a8');
-    else if (adsTotalVal < 0) adsTotal.setBackground('#ea9999');
+    sheet.setConditionalFormatRules([
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([adxRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberLessThan(0).setBackground('#ea9999').setRanges([adxRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([adsRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberLessThan(0).setBackground('#ea9999').setRanges([adsRange]).build(),
+    ]);
 
     // -------------------------------------------------------
     // BORDERS
@@ -774,13 +820,16 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
     // Currency format on summary value cells
     sheet.getRange(summaryRow + 1, startCol + 1, 3, 1).setNumberFormat('#,##0.00');
 
-    // Conditional formatting on summary values
-    [[summaryRow + 1, startCol + 1], [summaryRow + 2, startCol + 1], [summaryRow + 3, startCol + 1]].forEach(([r, c]) => {
-        const cell = sheet.getRange(r, c);
-        const val = cell.getValue();
-        if (val > 0) cell.setBackground('#b6d7a8');
-        else if (val < 0) cell.setBackground('#ea9999');
-    });
+    // Conditional formatting on summary values (column-level rule)
+    const summaryValRange = sheet.getRange(summaryRow + 1, startCol + 1, 3, 1);
+    const existingRules = sheet.getConditionalFormatRules();
+    existingRules.push(
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberGreaterThan(0).setBackground('#b6d7a8').setRanges([summaryValRange]).build(),
+        SpreadsheetApp.newConditionalFormatRule()
+            .whenNumberLessThan(0).setBackground('#ea9999').setRanges([summaryValRange]).build()
+    );
+    sheet.setConditionalFormatRules(existingRules);
 
     // -------------------------------------------------------
     // BROWSER COVERAGE TABLE
