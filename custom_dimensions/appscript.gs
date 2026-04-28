@@ -673,9 +673,18 @@ function generateOutput(ss, sheetName, treatment, control, monthKey) {
     // --- eCPM formulas on the TOTAL row (WEIGHTED AVERAGE of daily eCPMs) ---
     // ADX TG eCPM: col 7 (weighted by col 4), ADX CG eCPM: col 13 (weighted by col 10)
     // ADS TG eCPM: col 23 (weighted by col 20), ADS CG eCPM: col 29 (weighted by col 26)
-    const ecpmWeightCols = { 7: 4, 13: 10, 15: 4, 16: 3, 23: 20, 29: 26, 31: 20, 32: 19 };
+    const ecpmWeightCols = { 7: 4, 13: 10, 15: 4, 23: 20, 29: 26, 31: 20 };
     Object.entries(ecpmWeightCols).forEach(([c, w]) => {
         sheet.getRange(totalsRow, Number(c)).setFormulaR1C1(`=ARRAYFORMULA(AVERAGE.WEIGHTED(IF(ISBLANK(R${dataStartRow}C:R${dataEndRow}C),0,R${dataStartRow}C:R${dataEndRow}C), IF(ISBLANK(R${dataStartRow}C${w}:R${dataEndRow}C${w}),0,R${dataStartRow}C${w}:R${dataEndRow}C${w})))`);
+    });
+
+    // Revenue % TOTAL: weighted avg of non-blank rows, weight = TG ad requests
+    // Col 16 (AdX Revenue %) weighted by col 4 (TG AdX Ad Requests)
+    // Col 32 (AdS Revenue %) weighted by col 20 (TG AdS Ad Requests)
+    [{ col: 16, weightCol: 4 }, { col: 32, weightCol: 20 }].forEach(({ col, weightCol }) => {
+        sheet.getRange(totalsRow, col).setFormulaR1C1(
+            `=IFERROR(ARRAYFORMULA(AVERAGE.WEIGHTED(IF(R${dataStartRow}C:R${dataEndRow}C<>"",R${dataStartRow}C:R${dataEndRow}C,0),IF(R${dataStartRow}C:R${dataEndRow}C<>"",R${dataStartRow}C${weightCol}:R${dataEndRow}C${weightCol},0))),"")`
+        );
     });
 
     // --- Uplift formulas on the TOTAL row ---
